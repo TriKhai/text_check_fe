@@ -1,30 +1,42 @@
-import { useState, useCallback } from 'react';
-import type { AIResult, Tab, Lang } from '../types';
-import { callGroq } from '../services/groq';
-import { buildPrompt } from '../services/prompt';
-import { callGemini } from '../services/gemini';
+import { useCallback, useState } from 'react';
+import type { AIResult, Lang, Provider, Tab } from '../types';
+import { INITIAL_RESULT } from '../types';
 
-const initialResult: AIResult = { text: '', status: 'idle', duration: null };
+export function useAI(provider: Provider) {
+  const [result, setResult] = useState<AIResult>(INITIAL_RESULT);
 
-export function useAI() {
-    const [geminiResult, setGeminiResult] = useState<AIResult>(initialResult);
+  const reset = useCallback(() => setResult(INITIAL_RESULT), []);
 
-    const reset = useCallback(() => {
-        setGeminiResult(initialResult);
-    }, []);
+  const run = useCallback(
+    async (text: string, tab: Tab, lang: Lang) => { // bỏ tham số apiKeys — server tự quản lý key
+      if (!text.trim()) return;
 
-    const run = useCallback(async (input: string, tab: Tab, lang: Lang, apiKey: string) => {
-        const prompt = buildPrompt(input, tab, lang);
-        const t0 = Date.now();
-        const elapsed = () => parseFloat(((Date.now() - t0) / 1000).toFixed(1));
+      setResult({ ...INITIAL_RESULT, status: 'loading' });
 
-        setGeminiResult({ text: '', status: 'loading', duration: null });
+      try {
+        const res = await fetch('/api/generate', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ text, tab, lang, provider }), // bỏ apiKeys khỏi body
+        });
 
-        // await callGroq(prompt, apiKey)
-        await callGemini(prompt, apiKey)
-            .then((text) => setGeminiResult({ text, status: 'done', duration: elapsed() }))
-            .catch((e: Error) => setGeminiResult({ text: e.message, status: 'error', duration: elapsed() }));
-    }, []);
+        if (!res.ok) {
+          const err = await res.json().catch(() => ({}));
+          throw new Error(err.error ?? `Lỗi server (${res.status}).`);
+        }
 
-    return { geminiResult, run, reset };
+        const data: AIResult = await res.json();
+        setResult(data);
+      } catch (error) {
+        setResult({
+          ...INITIAL_RESULT,
+          text: error instanceof Error ? error.message : 'Không thể kết nối tới server.',
+          status: 'error',
+        });
+      }
+    },
+    [provider],
+  );
+
+  return { result, run, reset };
 }
